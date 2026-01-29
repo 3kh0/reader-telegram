@@ -99,11 +99,10 @@ func handleStart(c tele.Context) error {
 	}
 }
 
-func handleList(c tele.Context) error {
-	rows, err := db.Query("SELECT id, feed_url, title, refresh_interval, last_refreshed, paused FROM subscriptions WHERE user_id = $1 ORDER BY created_at", c.Sender().ID)
+func buildListContent(userID int64) (string, error) {
+	rows, err := db.Query("SELECT id, feed_url, title, refresh_interval, last_refreshed, paused FROM subscriptions WHERE user_id = $1 ORDER BY created_at", userID)
 	if err != nil {
-		log.Printf("cant fetch subs %v", err)
-		return c.Send("cant fetch subs")
+		return "", err
 	}
 	defer rows.Close()
 
@@ -139,9 +138,27 @@ func handleList(c tele.Context) error {
 		entries = append(entries, entry+"\n"+links)
 	}
 	if len(entries) == 0 {
+		return "", nil
+	}
+	return fmt.Sprintf("📋 <b>Your Subscriptions</b>\n\n%s", strings.Join(entries, "\n\n")), nil
+}
+
+func listKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	menu.Inline(menu.Row(menu.Data("🔄 Refresh", "refresh_list")))
+	return menu
+}
+
+func handleList(c tele.Context) error {
+	content, err := buildListContent(c.Sender().ID)
+	if err != nil {
+		log.Printf("cant fetch subs %v", err)
+		return c.Send("cant fetch subs")
+	}
+	if content == "" {
 		return c.Send("No subscriptions yet. Send me an RSS feed URL to subscribe.")
 	}
-	return c.Send(fmt.Sprintf("📋 <b>Your Subscriptions</b>\n\n%s", strings.Join(entries, "\n\n")), tele.ModeHTML, tele.NoPreview)
+	return c.Send(content, tele.ModeHTML, tele.NoPreview, listKeyboard())
 }
 
 func handleRemoveCmd(c tele.Context, subID int64) error {
@@ -240,7 +257,20 @@ func interval(seconds int64) string {
 }
 
 func callback(c tele.Context) error {
-	data := c.Callback().Data
+	data := strings.TrimPrefix(c.Callback().Data, "\f")
+	if data == "refresh_list" {
+		content, err := buildListContent(c.Sender().ID)
+		if err != nil {
+			return c.Respond(&tele.CallbackResponse{Text: "cant fetch"})
+		}
+		if content == "" {
+			c.Edit("No subscriptions yet! Send me an RSS feed URL to add one.")
+			return c.Respond()
+		}
+		c.Edit(content, tele.ModeHTML, tele.NoPreview, listKeyboard())
+		return c.Respond(&tele.CallbackResponse{Text: "Refreshed!"})
+	}
+
 	parts := strings.SplitN(data, ":", 3)
 	if len(parts) < 3 {
 		return c.Respond(&tele.CallbackResponse{Text: "invalid"})
