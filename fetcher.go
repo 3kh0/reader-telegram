@@ -132,7 +132,7 @@ func processFeed(bot *tele.Bot, sub Subscription) {
 	for i := len(newItems) - 1; i >= 0; i-- {
 		item := newItems[i]
 		msg := formatItem(feedName, item)
-		if _, err := bot.Send(user, msg, tele.ModeHTML, tele.NoPreview); err != nil {
+		if _, err := bot.Send(user, msg, tele.ModeHTML); err != nil {
 			log.Printf("fetcher: cant send to %d: %v", sub.UserID, err)
 		}
 		time.Sleep(100 * time.Millisecond)
