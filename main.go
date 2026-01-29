@@ -271,10 +271,18 @@ func callback(c tele.Context) error {
 
 func handleText(c tele.Context) error {
 	t := strings.TrimSpace(c.Text())
-	if !isValidURL(t) {
+	lines := strings.Fields(t)
+	var urls []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if isValidURL(line) {
+			urls = append(urls, line)
+		}
+	}
+	if len(urls) == 0 {
 		return c.Send("invalid input")
 	}
-	return addSub(c, t)
+	return addSubs(c, urls)
 }
 
 func isValidURL(s string) bool {
@@ -282,23 +290,48 @@ func isValidURL(s string) bool {
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https")
 }
 
-func addSub(c tele.Context, url string) error {
-	msg, _ := c.Bot().Send(c.Recipient(), "⏳ Fetching feed...")
-	edit := func(s string) { if msg != nil { c.Bot().Edit(msg, s) } }
+func addSubs(c tele.Context, urls []string) error {
+	total := len(urls)
+	msg, _ := c.Bot().Send(c.Recipient(), fmt.Sprintf("⏳ Checking 1/%d...", total))
+	edit := func(s string) {
+		if msg != nil {
+			c.Bot().Edit(msg, s)
+		}
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	f, err := gofeed.NewParser().ParseURLWithContext(url, ctx)
-	if err != nil {
-		log.Printf("cant parse %s: %v", url, err)
-		edit("❌ Can't parse feed")
+	parser := gofeed.NewParser()
+	var added []string
+	var failed int
+
+	for i, u := range urls {
+		edit(fmt.Sprintf("⏳ Checking %d/%d...", i+1, total))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		f, err := parser.ParseURLWithContext(u, ctx)
+		cancel()
+
+		if err != nil {
+			log.Printf("cant parse %s: %v", u, err)
+			failed++
+			continue
+		}
+		if _, err = db.Exec("INSERT INTO subscriptions (user_id, feed_url, title) VALUES ($1, $2, $3) ON CONFLICT (user_id, feed_url) DO UPDATE SET title = $3", c.Sender().ID, u, f.Title); err != nil {
+			log.Printf("cant save %v", err)
+			failed++
+			continue
+		}
+		added = append(added, f.Title)
+	}
+
+	if len(added) == 0 {
+		edit("❌ Failed to add any feeds")
 		return nil
 	}
-	if _, err = db.Exec("INSERT INTO subscriptions (user_id, feed_url, title) VALUES ($1, $2, $3) ON CONFLICT (user_id, feed_url) DO UPDATE SET title = $3", c.Sender().ID, url, f.Title); err != nil {
-		log.Printf("cant save %v", err)
-		edit("❌ Can't save")
-		return nil
+
+	result := fmt.Sprintf("✅ Added %d feed(s): %s", len(added), strings.Join(added, ", "))
+	if failed > 0 {
+		result += fmt.Sprintf("\n❌ %d failed", failed)
 	}
-	edit(fmt.Sprintf("✅ Saved %s", f.Title))
+	edit(result)
 	return nil
 }
