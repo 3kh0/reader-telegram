@@ -61,7 +61,7 @@ func handleStart(c tele.Context) error {
 }
 
 func handleList(c tele.Context) error {
-	rows, err := db.Query("SELECT feed_url, title FROM subscriptions WHERE user_id = $1 ORDER BY created_at", c.Sender().ID)
+	rows, err := db.Query("SELECT feed_url, title, refresh_interval, last_refreshed, last_post_id FROM subscriptions WHERE user_id = $1 ORDER BY created_at", c.Sender().ID)
 	if err != nil {
 		log.Printf("cant fetch subs %v", err)
 		return c.Send("cant fetch subs")
@@ -70,15 +70,26 @@ func handleList(c tele.Context) error {
 
 	var subs []string
 	for rows.Next() {
-		var u, t sql.NullString
-		if err := rows.Scan(&u, &t); err != nil {
+		var u, t, lastPostID sql.NullString
+		var refreshInterval sql.NullInt64
+		var lastRefreshed sql.NullTime
+		if err := rows.Scan(&u, &t, &refreshInterval, &lastRefreshed, &lastPostID); err != nil {
 			continue
 		}
+		name := u.String
 		if t.Valid && t.String != "" {
-			subs = append(subs, fmt.Sprintf("• %s\n  %s", t.String, u.String))
-		} else {
-			subs = append(subs, fmt.Sprintf("• %s", u.String))
+			name = t.String
 		}
+		entry := fmt.Sprintf("• %s\n  %s\n  refresh: %ds", name, u.String, refreshInterval.Int64)
+		if lastRefreshed.Valid {
+			entry += fmt.Sprintf(" | last: %s", lastRefreshed.Time.Format("2006-01-02 15:04"))
+		} else {
+			entry += " | last: never"
+		}
+		if lastPostID.Valid && lastPostID.String != "" {
+			entry += fmt.Sprintf("\n  last post: %s", lastPostID.String)
+		}
+		subs = append(subs, entry)
 	}
 	if len(subs) == 0 {
 		return c.Send("none")

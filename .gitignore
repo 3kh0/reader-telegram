@@ -31,3 +31,4 @@ vendor/
 # Build output
 /bin/
 /dist/
+reader-telegram

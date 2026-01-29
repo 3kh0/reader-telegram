@@ -4,6 +4,9 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     feed_url TEXT NOT NULL,
     title TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    refresh_interval INTEGER DEFAULT 3600,
+    last_refreshed TIMESTAMP,
+    last_post_id TEXT,
     UNIQUE(user_id, feed_url)
 );
 
