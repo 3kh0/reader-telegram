@@ -2,7 +2,7 @@
 
 I use Telegram for almost all of my communications, and it is extremely helpful to have all of my RSS feeds in once place! However, the existing bots are not fast at updating, so I decided to make my own! And while I am here, why not try a new language?
 
-Do note this is not done yet, so don't judge me
+Want to try it out? Just head over to [@reader_for_tg_bot](https://t.me/reader_for_tg_bot) and start adding your feeds!
 
 ## Cool stuff
 
