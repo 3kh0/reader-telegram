@@ -301,7 +301,7 @@ func addSubs(c tele.Context, urls []string) error {
 
 	parser := gofeed.NewParser()
 	var added []string
-	var failed int
+	var failed []string
 
 	for i, u := range urls {
 		edit(fmt.Sprintf("⏳ Checking %d/%d...", i+1, total))
@@ -312,25 +312,25 @@ func addSubs(c tele.Context, urls []string) error {
 
 		if err != nil {
 			log.Printf("cant parse %s: %v", u, err)
-			failed++
+			failed = append(failed, u)
 			continue
 		}
 		if _, err = db.Exec("INSERT INTO subscriptions (user_id, feed_url, title) VALUES ($1, $2, $3) ON CONFLICT (user_id, feed_url) DO UPDATE SET title = $3", c.Sender().ID, u, f.Title); err != nil {
 			log.Printf("cant save %v", err)
-			failed++
+			failed = append(failed, u)
 			continue
 		}
 		added = append(added, f.Title)
 	}
 
 	if len(added) == 0 {
-		edit("❌ Failed to add any feeds")
+		edit("❌ Failed to add any feeds:\n" + strings.Join(failed, "\n"))
 		return nil
 	}
 
 	result := fmt.Sprintf("✅ Added %d feed(s): %s", len(added), strings.Join(added, ", "))
-	if failed > 0 {
-		result += fmt.Sprintf("\n❌ %d failed", failed)
+	if len(failed) > 0 {
+		result += fmt.Sprintf("\n❌ %d failed:\n%s", len(failed), strings.Join(failed, "\n"))
 	}
 	edit(result)
 	return nil
