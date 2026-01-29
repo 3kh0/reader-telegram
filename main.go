@@ -328,7 +328,12 @@ func addSubs(c tele.Context, urls []string) error {
 		return nil
 	}
 
-	result := fmt.Sprintf("✅ Added %d feed(s): %s", len(added), strings.Join(added, ", "))
+	var result string
+	if len(added) == 1 {
+		result = fmt.Sprintf("✅ Added %s", added[0])
+	} else {
+		result = fmt.Sprintf("✅ Added %d feeds: %s", len(added), strings.Join(added, ", "))
+	}
 	if len(failed) > 0 {
 		result += fmt.Sprintf("\n❌ %d failed:\n%s", len(failed), strings.Join(failed, "\n"))
 	}
