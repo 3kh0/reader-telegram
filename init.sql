@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     refresh_interval INTEGER DEFAULT 3600,
     last_refreshed TIMESTAMP,
     last_post_id TEXT,
+    paused BOOLEAN DEFAULT FALSE,
     UNIQUE(user_id, feed_url)
 );
 

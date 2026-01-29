@@ -17,6 +17,7 @@ import (
 )
 
 var db *sql.DB
+var botUsername string
 
 func main() {
 	godotenv.Load()
@@ -31,9 +32,12 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		botUsername = b.Me.Username
 		b.Handle("/start", handleStart)
 		b.Handle("/list", handleList)
 		b.Handle(tele.OnText, handleText)
+		b.Handle(tele.OnCallback, callback)
+		go startFetcher(b)
 		log.Println("Bot is running...")
 		b.Start()
 	}
@@ -57,44 +61,212 @@ func initDB() (*sql.DB, error) {
 }
 
 func handleStart(c tele.Context) error {
-	return c.Send("hello world!")
+	payload := c.Message().Payload
+	if payload == "" {
+		return c.Send("Hello! Send me an RSS feed URL to subscribe, or use /list to see your feeds!")
+	}
+
+	parts := strings.SplitN(payload, "_", 2)
+	if len(parts) != 2 {
+		return c.Send("Don't know what to do with that!")
+	}
+	action, idStr := parts[0], parts[1]
+
+	var subID int64
+	if _, err := fmt.Sscanf(idStr, "%d", &subID); err != nil {
+		return c.Send("bad id")
+	}
+
+	var userID int64
+	if err := db.QueryRow("SELECT user_id FROM subscriptions WHERE id = $1", subID).Scan(&userID); err != nil {
+		return c.Send("Subscription not found.")
+	}
+	if userID != c.Sender().ID {
+		return c.Send("Subscription not found.")
+	}
+
+	switch action {
+	case "rm":
+		return handleRemoveCmd(c, subID)
+	case "rf":
+		return handleRefreshCmd(c, subID)
+	case "ps":
+		return handlePauseCmd(c, subID)
+	case "lt":
+		return handleLatestCmd(c, subID)
+	default:
+		return c.Send("Unknown action.")
+	}
 }
 
 func handleList(c tele.Context) error {
-	rows, err := db.Query("SELECT feed_url, title, refresh_interval, last_refreshed, last_post_id FROM subscriptions WHERE user_id = $1 ORDER BY created_at", c.Sender().ID)
+	rows, err := db.Query("SELECT id, feed_url, title, refresh_interval, last_refreshed, paused FROM subscriptions WHERE user_id = $1 ORDER BY created_at", c.Sender().ID)
 	if err != nil {
 		log.Printf("cant fetch subs %v", err)
 		return c.Send("cant fetch subs")
 	}
 	defer rows.Close()
 
-	var subs []string
+	var entries []string
 	for rows.Next() {
-		var u, t, lastPostID sql.NullString
+		var id int64
+		var u, t sql.NullString
 		var refreshInterval sql.NullInt64
 		var lastRefreshed sql.NullTime
-		if err := rows.Scan(&u, &t, &refreshInterval, &lastRefreshed, &lastPostID); err != nil {
+		var paused bool
+		if err := rows.Scan(&id, &u, &t, &refreshInterval, &lastRefreshed, &paused); err != nil {
 			continue
 		}
 		name := u.String
 		if t.Valid && t.String != "" {
 			name = t.String
 		}
-		entry := fmt.Sprintf("• %s\n  %s\n  refresh: %ds", name, u.String, refreshInterval.Int64)
+		status := "🟢"
+		pauseLabel := "Pause"
+		if paused {
+			status = "⏸️"
+			pauseLabel = "Resume"
+		}
+
+		entry := fmt.Sprintf("%s <b>%s</b>\n%s\nRefresh: %s", status, name, u.String, interval(refreshInterval.Int64))
 		if lastRefreshed.Valid {
-			entry += fmt.Sprintf(" | last: %s", lastRefreshed.Time.Format("2006-01-02 15:04"))
-		} else {
-			entry += " | last: never"
+			entry += fmt.Sprintf(" | Last: %s", lastRefreshed.Time.Format("Jan 2 15:04"))
 		}
-		if lastPostID.Valid && lastPostID.String != "" {
-			entry += fmt.Sprintf("\n  last post: %s", lastPostID.String)
-		}
-		subs = append(subs, entry)
+
+		links := fmt.Sprintf("└ <a href=\"https://t.me/%s?start=rm_%d\">Remove</a> • <a href=\"https://t.me/%s?start=rf_%d\">Refresh</a> • <a href=\"https://t.me/%s?start=ps_%d\">%s</a> • <a href=\"https://t.me/%s?start=lt_%d\">Latest</a>",
+			botUsername, id, botUsername, id, botUsername, id, pauseLabel, botUsername, id)
+
+		entries = append(entries, entry+"\n"+links)
 	}
-	if len(subs) == 0 {
-		return c.Send("none")
+	if len(entries) == 0 {
+		return c.Send("No subscriptions yet. Send me an RSS feed URL to subscribe.")
 	}
-	return c.Send(fmt.Sprintf("subs:\n\n%s", strings.Join(subs, "\n\n")))
+	return c.Send(fmt.Sprintf("📋 <b>Your Subscriptions</b>\n\n%s", strings.Join(entries, "\n\n")), tele.ModeHTML, tele.NoPreview)
+}
+
+func handleRemoveCmd(c tele.Context, subID int64) error {
+	var title sql.NullString
+	db.QueryRow("SELECT title FROM subscriptions WHERE id = $1", subID).Scan(&title)
+	if _, err := db.Exec("DELETE FROM subscriptions WHERE id = $1", subID); err != nil {
+		return c.Send("Failed to remove.")
+	}
+	name := "subscription"
+	if title.Valid && title.String != "" {
+		name = title.String
+	}
+	return c.Send(fmt.Sprintf("✅ Removed %s", name))
+}
+
+func handleRefreshCmd(c tele.Context, subID int64) error {
+	var title sql.NullString
+	var currentInterval int64
+	if err := db.QueryRow("SELECT title, refresh_interval FROM subscriptions WHERE id = $1", subID).Scan(&title, &currentInterval); err != nil {
+		return c.Send("Subscription not found.")
+	}
+	name := "this feed"
+	if title.Valid && title.String != "" {
+		name = title.String
+	}
+
+	rm := &tele.ReplyMarkup{}
+	rm.Inline(
+		rm.Row(
+			rm.Data("10m", fmt.Sprintf("setrefresh:%d:600", subID)),
+			rm.Data("30m", fmt.Sprintf("setrefresh:%d:1800", subID)),
+			rm.Data("1h", fmt.Sprintf("setrefresh:%d:3600", subID)),
+		),
+		rm.Row(
+			rm.Data("6h", fmt.Sprintf("setrefresh:%d:21600", subID)),
+			rm.Data("1d", fmt.Sprintf("setrefresh:%d:86400", subID)),
+			rm.Data("1w", fmt.Sprintf("setrefresh:%d:604800", subID)),
+		),
+	)
+	msg := fmt.Sprintf("⏱ Set refresh interval for <b>%s</b>\n\nCurrently set to: %s", name, interval(currentInterval))
+	return c.Send(msg, tele.ModeHTML, rm)
+}
+
+func handlePauseCmd(c tele.Context, subID int64) error {
+	var paused bool
+	var title sql.NullString
+	db.QueryRow("SELECT paused, title FROM subscriptions WHERE id = $1", subID).Scan(&paused, &title)
+	newPaused := !paused
+	if _, err := db.Exec("UPDATE subscriptions SET paused = $1 WHERE id = $2", newPaused, subID); err != nil {
+		return c.Send("Failed to update.")
+	}
+	name := "subscription"
+	if title.Valid && title.String != "" {
+		name = title.String
+	}
+	if newPaused {
+		return c.Send(fmt.Sprintf("⏸️ Paused %s", name))
+	}
+	return c.Send(fmt.Sprintf("▶️ Resumed %s", name))
+}
+
+func handleLatestCmd(c tele.Context, subID int64) error {
+	var feedURL string
+	if err := db.QueryRow("SELECT feed_url FROM subscriptions WHERE id = $1", subID).Scan(&feedURL); err != nil {
+		return c.Send("Subscription not found.")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	feed, err := gofeed.NewParser().ParseURLWithContext(feedURL, ctx)
+	if err != nil {
+		return c.Send("Failed to fetch feed.")
+	}
+	if len(feed.Items) == 0 {
+		return c.Send("No items in feed.")
+	}
+
+	item := feed.Items[0]
+	msg := fmt.Sprintf("<b>%s</b>\n\n%s", feed.Title, item.Title)
+	if item.Link != "" {
+		msg += fmt.Sprintf("\n\n<a href=\"%s\">Read more</a>", item.Link)
+	}
+	return c.Send(msg, tele.ModeHTML)
+}
+
+func interval(seconds int64) string {
+	switch {
+	case seconds >= 86400:
+		return fmt.Sprintf("%dd", seconds/86400)
+	case seconds >= 3600:
+		return fmt.Sprintf("%dh", seconds/3600)
+	default:
+		return fmt.Sprintf("%dm", seconds/60)
+	}
+}
+
+func callback(c tele.Context) error {
+	data := c.Callback().Data
+	parts := strings.SplitN(data, ":", 3)
+	if len(parts) < 3 {
+		return c.Respond(&tele.CallbackResponse{Text: "invalid"})
+	}
+
+	var subID, iv int64
+	if _, err := fmt.Sscanf(parts[1], "%d", &subID); err != nil {
+		return c.Respond(&tele.CallbackResponse{Text: "invalid id"})
+	}
+	if _, err := fmt.Sscanf(parts[2], "%d", &iv); err != nil {
+		return c.Respond(&tele.CallbackResponse{Text: "invalid interval"})
+	}
+
+	var userID int64
+	if err := db.QueryRow("SELECT user_id FROM subscriptions WHERE id = $1", subID).Scan(&userID); err != nil {
+		return c.Respond(&tele.CallbackResponse{Text: "not found"})
+	}
+	if userID != c.Sender().ID {
+		return c.Respond(&tele.CallbackResponse{Text: "not yours"})
+	}
+
+	if _, err := db.Exec("UPDATE subscriptions SET refresh_interval = $1 WHERE id = $2", iv, subID); err != nil {
+		return c.Respond(&tele.CallbackResponse{Text: "cant update"})
+	}
+	c.Edit(fmt.Sprintf("✅ Updated to %s", interval(iv)))
+	return c.Respond(&tele.CallbackResponse{Text: fmt.Sprintf("✅ Set to %s", interval(iv))})
 }
 
 func handleText(c tele.Context) error {
@@ -111,16 +283,22 @@ func isValidURL(s string) bool {
 }
 
 func addSub(c tele.Context, url string) error {
+	msg, _ := c.Bot().Send(c.Recipient(), "⏳ Fetching feed...")
+	edit := func(s string) { if msg != nil { c.Bot().Edit(msg, s) } }
+
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	f, err := gofeed.NewParser().ParseURLWithContext(url, ctx)
 	if err != nil {
 		log.Printf("cant parse %s: %v", url, err)
-		return c.Send("cant parse")
+		edit("❌ Can't parse feed")
+		return nil
 	}
 	if _, err = db.Exec("INSERT INTO subscriptions (user_id, feed_url, title) VALUES ($1, $2, $3) ON CONFLICT (user_id, feed_url) DO UPDATE SET title = $3", c.Sender().ID, url, f.Title); err != nil {
 		log.Printf("cant save %v", err)
-		return c.Send("cant save")
+		edit("❌ Can't save")
+		return nil
 	}
-	return c.Send(fmt.Sprintf("saved %s", f.Title))
+	edit(fmt.Sprintf("✅ Saved %s", f.Title))
+	return nil
 }
