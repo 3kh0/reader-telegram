@@ -10,3 +10,11 @@ Want to try it out? Just head over to [@reader_for_tg_bot](https://t.me/reader_f
 - Adjustable refresh rates (if some feeds update faster than others)
 - Bot is just fast.
 - Written in Go, so it is Google Approved™️
+
+## Deployment
+
+This was made to be used with Coolify, so please deploy it from the [`Dockerfile`](./Dockerfile).
+
+You will also want to spin up a simple PostgreSQL database to store your data, the default configuration seen in [`docker-compose.yml`](./docker-compose.yml) should work fine.
+
+Then copy over the [`.env.example`](./.env.example) to `.env` and fill the Telegram bot token and DB URL.
