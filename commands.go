@@ -67,9 +67,7 @@ func handleLatestCmd(c tele.Context, id int64) error {
 	if len(f.Items) == 0 {
 		return c.Send("No items in feed.")
 	}
-	msg := fmt.Sprintf("<b>%s</b>\n\n%s", f.Title, f.Items[0].Title)
-	if f.Items[0].Link != "" {
-		msg += fmt.Sprintf("\n\n<a href=\"%s\">Read more</a>", f.Items[0].Link)
-	}
+	item := f.Items[0]
+	msg := formatItem(f.Title, item)
 	return c.Send(msg, tele.ModeHTML)
 }

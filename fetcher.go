@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"html"
 	"log"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -167,14 +170,43 @@ func getItemID(item *gofeed.Item) string {
 	return item.Link
 }
 
+var (
+	head = regexp.MustCompile(`(?i)<h[1-6][^>]*>`)
+	par = regexp.MustCompile(`(?i)</p>|<br\s*/?>`)
+	tag = regexp.MustCompile(`<[^>]*>`)
+	ms = regexp.MustCompile(`[^\S\n]+`)
+	ml = regexp.MustCompile(`\n{3,}`)
+)
+
 func formatItem(feedName string, item *gofeed.Item) string {
 	title := item.Title
 	if title == "" {
 		title = "New post"
 	}
-	msg := fmt.Sprintf("<b>%s</b>\n\n%s", feedName, title)
+
+	msg := fmt.Sprintf("<b>%s</b>: <a href=\"%s\">%s</a>", esc(feedName), item.Link, esc(title))
+
+	rawDesc := item.Description
+	if rawDesc == "" {
+		rawDesc = item.Content
+	}
+	if rawDesc != "" {
+		desc := head.ReplaceAllString(rawDesc, "\n\n")
+		desc = par.ReplaceAllString(desc, "\n")
+		desc = tag.ReplaceAllString(desc, "")
+		desc = html.UnescapeString(desc)
+		desc = ms.ReplaceAllString(desc, " ")
+		desc = ml.ReplaceAllString(desc, "\n\n")
+		desc = strings.TrimSpace(desc)
+		desc = esc(desc)
+		if len(desc) > 3000 {
+			desc = desc[:3000] + "..."
+		}
+		msg += "\n\n" + desc
+	}
+
 	if item.Link != "" {
-		msg += fmt.Sprintf("\n\n<a href=\"%s\">Read more</a>", item.Link)
+		msg += fmt.Sprintf("\n\n<a href=\"%s\">View original</a>", item.Link)
 	}
 	return msg
 }
