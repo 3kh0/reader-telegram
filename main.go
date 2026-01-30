@@ -32,6 +32,7 @@ func main() {
 		b.Handle("/start", handleStart)
 		b.Handle("/list", handleList)
 		b.Handle("/inspect", handleInspect)
+		b.Handle("/snooze", handleSnooze)
 		b.Handle(tele.OnText, handleText)
 		b.Handle(tele.OnCallback, callback)
 		go startFetcher(b)

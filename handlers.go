@@ -128,6 +128,31 @@ func handleInspect(c tele.Context) error {
 	return c.Send(doc)
 }
 
+func snoozeAll(userID int64, pause bool) (int64, error) {
+	res, err := db.Exec("UPDATE subscriptions SET paused = $1 WHERE user_id = $2", pause, userID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func handleSnooze(c tele.Context) error {
+	payload := c.Message().Payload
+	pause := payload != "resume"
+
+	n, err := snoozeAll(c.Sender().ID, pause)
+	if err != nil {
+		log.Printf("cant update pause state: %v", err)
+		return c.Send("cant update pause state")
+	}
+	if n == 0 {
+		return c.Send("You have no subscriptions to " + map[bool]string{true: "pause", false: "resume"}[pause] + ".")
+	}
+	action := map[bool]string{true: "resume", false: "pause"}[pause]
+	btn := tele.InlineButton{Text: "↩️ Undo (/snooze " + action + ")", Data: "snooze_" + action}
+	return c.Send(fmt.Sprintf("✅ Successfully %sd all your %d subscriptions.", map[bool]string{true: "pause", false: "resume"}[pause], n), &tele.ReplyMarkup{InlineKeyboard: [][]tele.InlineButton{{btn}}})
+}
+
 func esc(s string) string {
 	replacer := strings.NewReplacer(
 		"&", "&amp;",
@@ -139,6 +164,15 @@ func esc(s string) string {
 
 func callback(c tele.Context) error {
 	data := strings.TrimPrefix(c.Callback().Data, "\f")
+	if data == "snooze_pause" || data == "snooze_resume" {
+		pause := data == "snooze_pause"
+		n, err := snoozeAll(c.Sender().ID, pause)
+		if err != nil {
+			return c.Respond(&tele.CallbackResponse{Text: "Error: " + err.Error()})
+		}
+		c.Edit(fmt.Sprintf("✅ Successfully %sd all your %d subscriptions.", map[bool]string{true: "pause", false: "resume"}[pause], n))
+		return c.Respond()
+	}
 	if data == "refresh_list" {
 		content, err := buildList(c.Sender().ID)
 		if err != nil {
