@@ -21,7 +21,7 @@ func handleStart(c tele.Context) error {
 
 	parts := strings.SplitN(payload, "_", 2)
 	if len(parts) != 2 {
-		return c.Send("Don't know what to do with that!")
+		return c.Send("Don't know what to do with that! But hey, send me an RSS feed URL and I can subscribe you to it!")
 	}
 	action, idStr := parts[0], parts[1]
 
@@ -32,10 +32,10 @@ func handleStart(c tele.Context) error {
 
 	var userID int64
 	if err := db.QueryRow("SELECT user_id FROM subscriptions WHERE id = $1", subID).Scan(&userID); err != nil {
-		return c.Send("Subscription not found.")
+		return c.Send("❌ Subscription not found.")
 	}
 	if userID != c.Sender().ID {
-		return c.Send("Subscription not found.")
+		return c.Send("❌ Subscription not found.")
 	}
 
 	switch action {
@@ -59,7 +59,7 @@ func handleList(c tele.Context) error {
 		return c.Send("cant fetch subs")
 	}
 	if content == "" {
-		return c.Send("No subscriptions yet. Send me an RSS feed URL to subscribe.")
+		return c.Send("❌ No subscriptions yet. Send me an RSS feed URL to subscribe.")
 	}
 	return c.Send(content, tele.ModeHTML, tele.NoPreview, listKeyboard())
 }
@@ -75,7 +75,7 @@ func handleText(c tele.Context) error {
 		}
 	}
 	if len(urls) == 0 {
-		return c.Send("invalid input")
+		return c.Send("Don't know what to do with that! But hey, send me an RSS feed URL and I can subscribe you to it!")
 	}
 	return addSubs(c, urls)
 }
@@ -83,7 +83,7 @@ func handleText(c tele.Context) error {
 func handleInspect(c tele.Context) error {
 	payload := c.Message().Payload
 	if !isValidURL(payload) {
-		return c.Send("Please provide a valid RSS feed URL")
+		return c.Send("❌ Please provide a valid RSS feed URL")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -146,7 +146,7 @@ func handleSnooze(c tele.Context) error {
 		return c.Send("cant update pause state")
 	}
 	if n == 0 {
-		return c.Send("You have no subscriptions to " + map[bool]string{true: "pause", false: "resume"}[pause] + ".")
+		return c.Send("❌ You have no subscriptions to " + map[bool]string{true: "pause", false: "resume"}[pause] + ".")
 	}
 	action := map[bool]string{true: "resume", false: "pause"}[pause]
 	btn := tele.InlineButton{Text: "↩️ Undo (/snooze " + action + ")", Data: "snooze_" + action}
@@ -179,7 +179,7 @@ func callback(c tele.Context) error {
 			return c.Respond(&tele.CallbackResponse{Text: "cant fetch"})
 		}
 		if content == "" {
-			c.Edit("No subscriptions yet! Send me an RSS feed URL to add one.")
+			c.Edit("❌ No subscriptions yet! Send me an RSS feed URL to add one.")
 			return c.Respond()
 		}
 		c.Edit(content, tele.ModeHTML, tele.NoPreview, listKeyboard())
