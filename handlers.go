@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/url"
@@ -77,6 +78,63 @@ func handleText(c tele.Context) error {
 		return c.Send("invalid input")
 	}
 	return addSubs(c, urls)
+}
+
+func handleInspect(c tele.Context) error {
+	payload := c.Message().Payload
+	if !isValidURL(payload) {
+		return c.Send("Please provide a valid RSS feed URL")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	f, err := gofeed.NewParser().ParseURLWithContext(payload, ctx)
+	if err != nil {
+		return c.Send("❌ Failed to parse the RSS feed, we got:\n<blockquote><code>" + err.Error() + "</code></blockquote>", tele.ModeHTML)
+	}
+
+	var items []string
+	for i, item := range f.Items {
+		if i >= 5 {
+			break
+		}
+		items = append(items, fmt.Sprintf("• <a href=\"%s\">%s</a> - %s", item.Link, esc(item.Title), relativeTime(*item.PublishedParsed)))
+	}
+
+	msg := fmt.Sprintf(
+		"Inspecting: <code>%s</code>\nDescription: <code>%s</code>\nURL: <code>%s</code>\nFeed type: <code>%s</code>\nFeed version: <code>%s</code>\n\nItems:\n\n%s",
+		esc(f.Title),
+		esc(f.Description),
+		esc(payload),
+		esc(f.FeedType),
+		esc(f.FeedVersion),
+		strings.Join(items, "\n"),
+	)
+
+	if err := c.Send(msg, tele.ModeHTML); err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return nil
+	}
+
+	doc := &tele.Document{
+		File:     tele.FromReader(strings.NewReader(string(data))),
+		FileName: fmt.Sprintf("%s_feed.json", f.Title),
+		Caption:  "full data dump:",
+	}
+	return c.Send(doc)
+}
+
+func esc(s string) string {
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+	)
+	return replacer.Replace(s)
 }
 
 func callback(c tele.Context) error {

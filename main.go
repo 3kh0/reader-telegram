@@ -31,6 +31,7 @@ func main() {
 		botUsername = b.Me.Username
 		b.Handle("/start", handleStart)
 		b.Handle("/list", handleList)
+		b.Handle("/inspect", handleInspect)
 		b.Handle(tele.OnText, handleText)
 		b.Handle(tele.OnCallback, callback)
 		go startFetcher(b)

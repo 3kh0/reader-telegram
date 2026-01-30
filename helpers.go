@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -16,6 +17,20 @@ func interval(seconds int64) string {
 		return fmt.Sprintf("%dh", seconds/3600)
 	default:
 		return fmt.Sprintf("%dm", seconds/60)
+	}
+}
+
+func relativeTime(t time.Time) string {
+	d := int64(time.Since(t).Seconds())
+	switch {
+	case d < 60:
+		return "just now"
+	case d < 3600:
+		return fmt.Sprintf("%d minutes ago", d/60)
+	case d < 86400:
+		return fmt.Sprintf("%d hours ago", d/3600)
+	default:
+		return fmt.Sprintf("%d days ago", d/86400)
 	}
 }
 
