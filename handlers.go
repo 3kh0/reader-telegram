@@ -176,7 +176,7 @@ func callback(c tele.Context) error {
 	if data == "refresh_list" {
 		content, err := buildList(c.Sender().ID)
 		if err != nil {
-			return c.Respond(&tele.CallbackResponse{Text: "cant fetch"})
+		return c.Respond(&tele.CallbackResponse{Text: "❌ Invalid action. Please try again."})
 		}
 		if content == "" {
 			c.Edit("❌ No subscriptions yet! Send me an RSS feed URL to add one.")
@@ -188,27 +188,27 @@ func callback(c tele.Context) error {
 
 	parts := strings.SplitN(data, ":", 3)
 	if len(parts) < 3 {
-		return c.Respond(&tele.CallbackResponse{Text: "invalid"})
+		return c.Respond(&tele.CallbackResponse{Text: "❌ Invalid action. Please try again."})
 	}
 
 	var subID, iv int64
 	if _, err := fmt.Sscanf(parts[1], "%d", &subID); err != nil {
-		return c.Respond(&tele.CallbackResponse{Text: "invalid id"})
+		return c.Respond(&tele.CallbackResponse{Text: "❌ Invalid action. Please try again."})
 	}
 	if _, err := fmt.Sscanf(parts[2], "%d", &iv); err != nil {
-		return c.Respond(&tele.CallbackResponse{Text: "invalid interval"})
+		return c.Respond(&tele.CallbackResponse{Text: "❌ Invalid action. Please try again."})
 	}
 
 	var userID int64
 	if err := db.QueryRow("SELECT user_id FROM subscriptions WHERE id = $1", subID).Scan(&userID); err != nil {
-		return c.Respond(&tele.CallbackResponse{Text: "not found"})
+		return c.Respond(&tele.CallbackResponse{Text: "❌ Invalid action. Please try again."})
 	}
 	if userID != c.Sender().ID {
-		return c.Respond(&tele.CallbackResponse{Text: "not yours"})
+		return c.Respond(&tele.CallbackResponse{Text: "❌ Invalid action. Please try again."})
 	}
 
 	if _, err := db.Exec("UPDATE subscriptions SET refresh_interval = $1 WHERE id = $2", iv, subID); err != nil {
-		return c.Respond(&tele.CallbackResponse{Text: "cant update"})
+		return c.Respond(&tele.CallbackResponse{Text: "❌ Invalid action. Please try again."})
 	}
 	c.Edit(fmt.Sprintf("✅ Updated to %s", interval(iv)))
 	return c.Respond(&tele.CallbackResponse{Text: fmt.Sprintf("✅ Set to %s", interval(iv))})
