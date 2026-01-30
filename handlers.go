@@ -1,0 +1,179 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/mmcdole/gofeed"
+	tele "gopkg.in/telebot.v4"
+)
+
+func handleStart(c tele.Context) error {
+	payload := c.Message().Payload
+	if payload == "" {
+		return c.Send("Hello! Send me an RSS feed URL to subscribe, or use /list to see your feeds!")
+	}
+
+	parts := strings.SplitN(payload, "_", 2)
+	if len(parts) != 2 {
+		return c.Send("Don't know what to do with that!")
+	}
+	action, idStr := parts[0], parts[1]
+
+	var subID int64
+	if _, err := fmt.Sscanf(idStr, "%d", &subID); err != nil {
+		return c.Send("bad id")
+	}
+
+	var userID int64
+	if err := db.QueryRow("SELECT user_id FROM subscriptions WHERE id = $1", subID).Scan(&userID); err != nil {
+		return c.Send("Subscription not found.")
+	}
+	if userID != c.Sender().ID {
+		return c.Send("Subscription not found.")
+	}
+
+	switch action {
+	case "rm":
+		return handleRemoveCmd(c, subID)
+	case "rf":
+		return handleRefreshCmd(c, subID)
+	case "ps":
+		return handlePauseCmd(c, subID)
+	case "lt":
+		return handleLatestCmd(c, subID)
+	default:
+		return c.Send("Unknown action.")
+	}
+}
+
+func handleList(c tele.Context) error {
+	content, err := buildList(c.Sender().ID)
+	if err != nil {
+		log.Printf("cant fetch subs %v", err)
+		return c.Send("cant fetch subs")
+	}
+	if content == "" {
+		return c.Send("No subscriptions yet. Send me an RSS feed URL to subscribe.")
+	}
+	return c.Send(content, tele.ModeHTML, tele.NoPreview, listKeyboard())
+}
+
+func handleText(c tele.Context) error {
+	t := strings.TrimSpace(c.Text())
+	lines := strings.Fields(t)
+	var urls []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if isValidURL(line) {
+			urls = append(urls, line)
+		}
+	}
+	if len(urls) == 0 {
+		return c.Send("invalid input")
+	}
+	return addSubs(c, urls)
+}
+
+func callback(c tele.Context) error {
+	data := strings.TrimPrefix(c.Callback().Data, "\f")
+	if data == "refresh_list" {
+		content, err := buildList(c.Sender().ID)
+		if err != nil {
+			return c.Respond(&tele.CallbackResponse{Text: "cant fetch"})
+		}
+		if content == "" {
+			c.Edit("No subscriptions yet! Send me an RSS feed URL to add one.")
+			return c.Respond()
+		}
+		c.Edit(content, tele.ModeHTML, tele.NoPreview, listKeyboard())
+		return c.Respond(&tele.CallbackResponse{Text: "Refreshed!"})
+	}
+
+	parts := strings.SplitN(data, ":", 3)
+	if len(parts) < 3 {
+		return c.Respond(&tele.CallbackResponse{Text: "invalid"})
+	}
+
+	var subID, iv int64
+	if _, err := fmt.Sscanf(parts[1], "%d", &subID); err != nil {
+		return c.Respond(&tele.CallbackResponse{Text: "invalid id"})
+	}
+	if _, err := fmt.Sscanf(parts[2], "%d", &iv); err != nil {
+		return c.Respond(&tele.CallbackResponse{Text: "invalid interval"})
+	}
+
+	var userID int64
+	if err := db.QueryRow("SELECT user_id FROM subscriptions WHERE id = $1", subID).Scan(&userID); err != nil {
+		return c.Respond(&tele.CallbackResponse{Text: "not found"})
+	}
+	if userID != c.Sender().ID {
+		return c.Respond(&tele.CallbackResponse{Text: "not yours"})
+	}
+
+	if _, err := db.Exec("UPDATE subscriptions SET refresh_interval = $1 WHERE id = $2", iv, subID); err != nil {
+		return c.Respond(&tele.CallbackResponse{Text: "cant update"})
+	}
+	c.Edit(fmt.Sprintf("✅ Updated to %s", interval(iv)))
+	return c.Respond(&tele.CallbackResponse{Text: fmt.Sprintf("✅ Set to %s", interval(iv))})
+}
+
+func isValidURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https")
+}
+
+func addSubs(c tele.Context, urls []string) error {
+	total := len(urls)
+	msg, _ := c.Bot().Send(c.Recipient(), fmt.Sprintf("⏳ Checking 1/%d...", total))
+	edit := func(s string) {
+		if msg != nil {
+			c.Bot().Edit(msg, s)
+		}
+	}
+
+	parser := gofeed.NewParser()
+	var added []string
+	var failed []string
+
+	for i, u := range urls {
+		edit(fmt.Sprintf("⏳ Checking %d/%d...", i+1, total))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		f, err := parser.ParseURLWithContext(u, ctx)
+		cancel()
+
+		if err != nil {
+			log.Printf("cant parse %s: %v", u, err)
+			failed = append(failed, u)
+			continue
+		}
+		if _, err = db.Exec("INSERT INTO subscriptions (user_id, feed_url, title) VALUES ($1, $2, $3) ON CONFLICT (user_id, feed_url) DO UPDATE SET title = $3", c.Sender().ID, u, f.Title); err != nil {
+			log.Printf("cant save %v", err)
+			failed = append(failed, u)
+			continue
+		}
+		added = append(added, f.Title)
+	}
+
+	if len(added) == 0 {
+		edit("❌ Failed to add any feeds:\n" + strings.Join(failed, "\n"))
+		return nil
+	}
+
+	var result string
+	if len(added) == 1 {
+		result = fmt.Sprintf("✅ Added %s", added[0])
+	} else {
+		result = fmt.Sprintf("✅ Added %d feeds: %s", len(added), strings.Join(added, ", "))
+	}
+	if len(failed) > 0 {
+		result += fmt.Sprintf("\n❌ %d failed:\n%s", len(failed), strings.Join(failed, "\n"))
+	}
+	edit(result)
+	return nil
+}
